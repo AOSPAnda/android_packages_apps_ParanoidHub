@@ -546,8 +546,7 @@ public class UpdatesListAdapter extends RecyclerView.Adapter<UpdatesListAdapter.
 
         ContextThemeWrapper wrapper = new ContextThemeWrapper(mActivity,
                 R.style.AppTheme_PopupMenuOverlapAnchor);
-        PopupMenu popupMenu = new PopupMenu(wrapper, anchor, Gravity.NO_GRAVITY,
-                R.attr.actionOverflowMenuStyle, 0);
+        PopupMenu popupMenu = new PopupMenu(wrapper, anchor, Gravity.NO_GRAVITY);
         popupMenu.inflate(R.menu.menu_action_mode);
 
         boolean shouldShowDelete = canDelete;

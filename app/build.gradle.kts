@@ -81,6 +81,7 @@ android {
             }
         }
     }
+    namespace = "co.aospa.hub"
 }
 
 dependencies {
