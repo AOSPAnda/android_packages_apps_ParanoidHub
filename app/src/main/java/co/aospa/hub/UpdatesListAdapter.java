@@ -15,18 +15,14 @@
  */
 package co.aospa.hub;
 
-import android.app.Activity;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.res.Resources;
-import android.net.Uri;
 import android.os.BatteryManager;
 import android.os.PowerManager;
-import android.text.SpannableString;
 import android.text.format.Formatter;
 import android.text.method.LinkMovementMethod;
-import android.text.util.Linkify;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -34,14 +30,11 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
-import android.widget.CheckBox;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 
-import androidx.activity.result.ActivityResultLauncher;
-import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.view.ContextThemeWrapper;
@@ -53,15 +46,6 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.snackbar.Snackbar;
 
-import co.aospa.hub.controller.UpdaterController;
-import co.aospa.hub.controller.UpdaterService;
-import co.aospa.hub.misc.BuildInfoUtils;
-import co.aospa.hub.misc.Constants;
-import co.aospa.hub.misc.StringGenerator;
-import co.aospa.hub.misc.Utils;
-import co.aospa.hub.model.UpdateInfo;
-import co.aospa.hub.model.UpdateStatus;
-
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -69,6 +53,14 @@ import java.text.DateFormat;
 import java.text.NumberFormat;
 import java.util.List;
 import java.util.stream.Stream;
+
+import co.aospa.hub.controller.UpdaterController;
+import co.aospa.hub.controller.UpdaterService;
+import co.aospa.hub.misc.Constants;
+import co.aospa.hub.misc.StringGenerator;
+import co.aospa.hub.misc.Utils;
+import co.aospa.hub.model.UpdateInfo;
+import co.aospa.hub.model.UpdateStatus;
 
 public class UpdatesListAdapter extends RecyclerView.Adapter<UpdatesListAdapter.ViewHolder> {
 
@@ -318,37 +310,21 @@ public class UpdatesListAdapter extends RecyclerView.Adapter<UpdatesListAdapter.
     }
 
     private void startDownloadWithWarning(final String downloadId) {
-        SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(mActivity);
-        boolean warn = preferences.getBoolean(Constants.PREF_METERED_NETWORK_WARNING, true);
-        if (!(Utils.isNetworkMetered(mActivity) && warn)) {
+        if (!Utils.isNetworkMetered(mActivity)) {
             mUpdaterController.startDownload(downloadId);
             return;
         }
 
-        View checkboxView = LayoutInflater.from(mActivity).inflate(R.layout.checkbox_view, null);
-        CheckBox checkbox = checkboxView.findViewById(R.id.checkbox);
-        checkbox.setText(R.string.checkbox_metered_network_warning);
-
         new AlertDialog.Builder(mActivity)
                 .setTitle(R.string.update_over_metered_network_title)
                 .setMessage(R.string.update_over_metered_network_message)
-                .setView(checkboxView)
-                .setPositiveButton(R.string.action_download,
-                        (dialog, which) -> {
-                            if (checkbox.isChecked()) {
-                                preferences.edit()
-                                        .putBoolean(Constants.PREF_METERED_NETWORK_WARNING, false)
-                                        .apply();
-                                mActivity.supportInvalidateOptionsMenu();
-                            }
-                            mUpdaterController.startDownload(downloadId);
-                        })
+                .setPositiveButton(R.string.action_download, (dialog, which) -> mUpdaterController.startDownload(downloadId))
                 .setNegativeButton(android.R.string.cancel, null)
                 .show();
     }
 
     private void setButtonAction(Button button, Action action, final String downloadId,
-            boolean enabled) {
+                                 boolean enabled) {
         final View.OnClickListener clickListener;
         switch (action) {
             case DOWNLOAD:
@@ -454,7 +430,7 @@ public class UpdatesListAdapter extends RecyclerView.Adapter<UpdatesListAdapter.
     }
 
     private View.OnClickListener getClickListener(final UpdateInfo update,
-            final boolean canDelete, View anchor) {
+                                                  final boolean canDelete, View anchor) {
         return view -> startActionMode(update, canDelete, anchor);
     }
 
