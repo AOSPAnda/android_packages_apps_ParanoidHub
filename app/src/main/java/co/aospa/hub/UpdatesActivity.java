@@ -16,14 +16,11 @@
 package co.aospa.hub;
 
 import android.annotation.SuppressLint;
-import android.app.Activity;
-import android.app.UiModeManager;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.content.res.Configuration;
 import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.icu.text.DateFormat;
@@ -47,8 +44,6 @@ import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import androidx.activity.result.ActivityResultLauncher;
-import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.ActionBar;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.widget.SwitchCompat;
@@ -65,6 +60,13 @@ import com.google.android.material.appbar.CollapsingToolbarLayout;
 import com.google.android.material.snackbar.Snackbar;
 
 import org.json.JSONException;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+
 import co.aospa.hub.controller.UpdaterController;
 import co.aospa.hub.controller.UpdaterService;
 import co.aospa.hub.download.DownloadClient;
@@ -73,12 +75,6 @@ import co.aospa.hub.misc.Constants;
 import co.aospa.hub.misc.StringGenerator;
 import co.aospa.hub.misc.Utils;
 import co.aospa.hub.model.UpdateInfo;
-
-import java.io.File;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
 
 public class UpdatesActivity extends UpdatesListActivity {
 
@@ -91,15 +87,10 @@ public class UpdatesActivity extends UpdatesListActivity {
     private View mRefreshIconView;
     private RotateAnimation mRefreshAnimation;
 
-    private boolean mIsTV;
-
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_updates);
-
-        UiModeManager uiModeManager = getSystemService(UiModeManager.class);
-        mIsTV = uiModeManager.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION;
 
         RecyclerView recyclerView = findViewById(R.id.recycler_view);
         mAdapter = new UpdatesListAdapter(this);
@@ -130,32 +121,30 @@ public class UpdatesActivity extends UpdatesListActivity {
             }
         };
 
-        if (!mIsTV) {
-            Toolbar toolbar = findViewById(R.id.toolbar);
-            setSupportActionBar(toolbar);
-            ActionBar actionBar = getSupportActionBar();
-            if (actionBar != null) {
-                actionBar.setDisplayShowTitleEnabled(false);
-                actionBar.setDisplayHomeAsUpEnabled(true);
-                final int statusBarHeight;
-                TypedValue tv = new TypedValue();
-                if (getTheme().resolveAttribute(android.R.attr.actionBarSize, tv, true)) {
-                    statusBarHeight = TypedValue.complexToDimensionPixelSize(
-                            tv.data, getResources().getDisplayMetrics());
-                } else {
-                    statusBarHeight = 0;
-                }
-                RelativeLayout headerContainer = findViewById(R.id.header_container);
-                recyclerView.setOnApplyWindowInsetsListener((view, insets) -> {
-                    int top = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top;
-                    CollapsingToolbarLayout.LayoutParams lp =
-                            (CollapsingToolbarLayout.LayoutParams)
-                                    headerContainer.getLayoutParams();
-                    lp.topMargin = top + statusBarHeight;
-                    headerContainer.setLayoutParams(lp);
-                    return insets;
-                });
+        Toolbar toolbar = findViewById(R.id.toolbar);
+        setSupportActionBar(toolbar);
+        ActionBar actionBar = getSupportActionBar();
+        if (actionBar != null) {
+            actionBar.setDisplayShowTitleEnabled(false);
+            actionBar.setDisplayHomeAsUpEnabled(true);
+            final int statusBarHeight;
+            TypedValue tv = new TypedValue();
+            if (getTheme().resolveAttribute(android.R.attr.actionBarSize, tv, true)) {
+                statusBarHeight = TypedValue.complexToDimensionPixelSize(
+                        tv.data, getResources().getDisplayMetrics());
+            } else {
+                statusBarHeight = 0;
             }
+            RelativeLayout headerContainer = findViewById(R.id.header_container);
+            recyclerView.setOnApplyWindowInsetsListener((view, insets) -> {
+                int top = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top;
+                CollapsingToolbarLayout.LayoutParams lp =
+                        (CollapsingToolbarLayout.LayoutParams)
+                                headerContainer.getLayoutParams();
+                lp.topMargin = top + statusBarHeight;
+                headerContainer.setLayoutParams(lp);
+                return insets;
+            });
         }
 
         TextView headerTitle = findViewById(R.id.header_title);
@@ -172,38 +161,33 @@ public class UpdatesActivity extends UpdatesListActivity {
         headerBuildDate.setText(StringGenerator.getDateLocalizedUTC(this,
                 DateFormat.LONG, BuildInfoUtils.getBuildDateTimestamp()));
 
-        if (!mIsTV) {
-            // Switch between header title and appbar title minimizing overlaps
-            final CollapsingToolbarLayout collapsingToolbar = findViewById(R.id.collapsing_toolbar);
-            final AppBarLayout appBar = findViewById(R.id.app_bar);
-            appBar.addOnOffsetChangedListener(new AppBarLayout.OnOffsetChangedListener() {
-                boolean mIsShown = false;
+        // Switch between header title and appbar title minimizing overlaps
+        final CollapsingToolbarLayout collapsingToolbar = findViewById(R.id.collapsing_toolbar);
+        final AppBarLayout appBar = findViewById(R.id.app_bar);
+        appBar.addOnOffsetChangedListener(new AppBarLayout.OnOffsetChangedListener() {
+            boolean mIsShown = false;
 
-                @Override
-                public void onOffsetChanged(AppBarLayout appBarLayout, int verticalOffset) {
-                    int scrollRange = appBarLayout.getTotalScrollRange();
-                    if (!mIsShown && scrollRange + verticalOffset < 10) {
-                        collapsingToolbar.setTitle(getString(R.string.display_name));
-                        mIsShown = true;
-                    } else if (mIsShown && scrollRange + verticalOffset > 100) {
-                        collapsingToolbar.setTitle(null);
-                        mIsShown = false;
-                    }
+            @Override
+            public void onOffsetChanged(AppBarLayout appBarLayout, int verticalOffset) {
+                int scrollRange = appBarLayout.getTotalScrollRange();
+                if (!mIsShown && scrollRange + verticalOffset < 10) {
+                    collapsingToolbar.setTitle(getString(R.string.display_name));
+                    mIsShown = true;
+                } else if (mIsShown && scrollRange + verticalOffset > 100) {
+                    collapsingToolbar.setTitle(null);
+                    mIsShown = false;
                 }
-            });
-
-            mRefreshAnimation = new RotateAnimation(0, 360, Animation.RELATIVE_TO_SELF, 0.5f,
-                    Animation.RELATIVE_TO_SELF, 0.5f);
-            mRefreshAnimation.setInterpolator(new LinearInterpolator());
-            mRefreshAnimation.setDuration(1000);
-
-            if (!Utils.hasTouchscreen(this)) {
-                // This can't be collapsed without a touchscreen
-                appBar.setExpanded(false);
             }
-        } else {
-            findViewById(R.id.refresh).setOnClickListener(v -> downloadUpdatesList(true));
-            findViewById(R.id.preferences).setOnClickListener(v -> showPreferencesDialog());
+        });
+
+        mRefreshAnimation = new RotateAnimation(0, 360, Animation.RELATIVE_TO_SELF, 0.5f,
+                Animation.RELATIVE_TO_SELF, 0.5f);
+        mRefreshAnimation.setInterpolator(new LinearInterpolator());
+        mRefreshAnimation.setDuration(1000);
+
+        if (!Utils.hasTouchscreen(this)) {
+            // This can't be collapsed without a touchscreen
+            appBar.setExpanded(false);
         }
     }
 
@@ -265,7 +249,7 @@ public class UpdatesActivity extends UpdatesListActivity {
 
         @Override
         public void onServiceConnected(ComponentName className,
-                IBinder service) {
+                                       IBinder service) {
             UpdaterService.LocalBinder binder = (UpdaterService.LocalBinder) service;
             mUpdaterService = binder.getService();
             mAdapter.setUpdaterController(mUpdaterService.getUpdaterController());
@@ -433,35 +417,20 @@ public class UpdatesActivity extends UpdatesListActivity {
     }
 
     private void refreshAnimationStart() {
-        if (!mIsTV) {
-            if (mRefreshIconView == null) {
-                mRefreshIconView = findViewById(R.id.menu_refresh);
-            }
-            if (mRefreshIconView != null) {
-                mRefreshAnimation.setRepeatCount(Animation.INFINITE);
-                mRefreshIconView.startAnimation(mRefreshAnimation);
-                mRefreshIconView.setEnabled(false);
-            }
-        } else {
-            findViewById(R.id.recycler_view).setVisibility(View.GONE);
-            findViewById(R.id.no_new_updates_view).setVisibility(View.GONE);
-            findViewById(R.id.refresh_progress).setVisibility(View.VISIBLE);
+        if (mRefreshIconView == null) {
+            mRefreshIconView = findViewById(R.id.menu_refresh);
+        }
+        if (mRefreshIconView != null) {
+            mRefreshAnimation.setRepeatCount(Animation.INFINITE);
+            mRefreshIconView.startAnimation(mRefreshAnimation);
+            mRefreshIconView.setEnabled(false);
         }
     }
 
     private void refreshAnimationStop() {
-        if (!mIsTV) {
-            if (mRefreshIconView != null) {
-                mRefreshAnimation.setRepeatCount(0);
-                mRefreshIconView.setEnabled(true);
-            }
-        } else {
-            findViewById(R.id.refresh_progress).setVisibility(View.GONE);
-            if (mAdapter.getItemCount() > 0) {
-                findViewById(R.id.recycler_view).setVisibility(View.VISIBLE);
-            } else {
-                findViewById(R.id.no_new_updates_view).setVisibility(View.VISIBLE);
-            }
+        if (mRefreshIconView != null) {
+            mRefreshAnimation.setRepeatCount(0);
+            mRefreshIconView.setEnabled(true);
         }
     }
 
