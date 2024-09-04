@@ -23,14 +23,20 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.ServiceConnection;
 import android.content.SharedPreferences;
+import android.content.res.Resources;
 import android.icu.text.DateFormat;
 import android.net.Uri;
+import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.os.PowerManager;
 import android.os.SystemProperties;
+import android.text.format.Formatter;
+import android.text.method.LinkMovementMethod;
 import android.util.Log;
 import android.util.TypedValue;
+import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.Menu;
 import android.view.MenuItem;
@@ -39,21 +45,25 @@ import android.view.View;
 import android.view.animation.Animation;
 import android.view.animation.LinearInterpolator;
 import android.view.animation.RotateAnimation;
-import android.widget.RelativeLayout;
+import android.widget.Button;
+import android.widget.ImageButton;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.ActionBar;
 import androidx.appcompat.app.AlertDialog;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.view.ContextThemeWrapper;
+import androidx.appcompat.view.menu.MenuBuilder;
+import androidx.appcompat.view.menu.MenuPopupHelper;
+import androidx.appcompat.widget.PopupMenu;
 import androidx.appcompat.widget.SwitchCompat;
 import androidx.appcompat.widget.Toolbar;
-import androidx.core.view.WindowInsetsCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import androidx.preference.PreferenceManager;
-import androidx.recyclerview.widget.LinearLayoutManager;
-import androidx.recyclerview.widget.RecyclerView;
-import androidx.recyclerview.widget.SimpleItemAnimator;
 
 import com.google.android.material.appbar.AppBarLayout;
 import com.google.android.material.appbar.CollapsingToolbarLayout;
@@ -63,9 +73,13 @@ import org.json.JSONException;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.text.NumberFormat;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 import co.aospa.hub.controller.UpdaterController;
 import co.aospa.hub.controller.UpdaterService;
@@ -75,32 +89,71 @@ import co.aospa.hub.misc.Constants;
 import co.aospa.hub.misc.StringGenerator;
 import co.aospa.hub.misc.Utils;
 import co.aospa.hub.model.UpdateInfo;
+import co.aospa.hub.model.UpdateStatus;
 
-public class UpdatesActivity extends UpdatesListActivity {
+public class UpdatesActivity extends AppCompatActivity {
 
     private static final String TAG = "UpdatesActivity";
+    private static final int BATTERY_PLUGGED_ANY = BatteryManager.BATTERY_PLUGGED_AC
+            | BatteryManager.BATTERY_PLUGGED_USB
+            | BatteryManager.BATTERY_PLUGGED_WIRELESS;
+
     private UpdaterService mUpdaterService;
     private BroadcastReceiver mBroadcastReceiver;
 
-    private UpdatesListAdapter mAdapter;
-
     private View mRefreshIconView;
     private RotateAnimation mRefreshAnimation;
+
+    // UI elements for update item
+    private Button mAction;
+    private ImageButton mMenu;
+    private TextView mBuildDate;
+    private TextView mBuildVersion;
+    private TextView mBuildSize;
+    private LinearLayout mProgress;
+    private ProgressBar mProgressBar;
+    private TextView mProgressText;
+    private TextView mPercentage;
+
+    private String mSelectedDownload;
+    private List<String> mDownloadIds;
+    private UpdaterController mUpdaterController;
+    private final ServiceConnection mConnection = new ServiceConnection() {
+
+        @Override
+        public void onServiceConnected(ComponentName className,
+                                       IBinder service) {
+            UpdaterService.LocalBinder binder = (UpdaterService.LocalBinder) service;
+            mUpdaterService = binder.getService();
+            mUpdaterController = mUpdaterService.getUpdaterController();
+            getUpdatesList();
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName componentName) {
+            mUpdaterService = null;
+            mUpdaterController = null;
+        }
+    };
+    private float mAlphaDisabledValue;
+    private AlertDialog infoDialog;
+
+    private static boolean isScratchMounted() {
+        try (Stream<String> lines = Files.lines(Path.of("/proc/mounts"))) {
+            return lines.anyMatch(x -> x.split(" ")[1].equals("/mnt/scratch"));
+        } catch (IOException e) {
+            return false;
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_updates);
 
-        RecyclerView recyclerView = findViewById(R.id.recycler_view);
-        mAdapter = new UpdatesListAdapter(this);
-        recyclerView.setAdapter(mAdapter);
-        RecyclerView.LayoutManager layoutManager = new LinearLayoutManager(this);
-        recyclerView.setLayoutManager(layoutManager);
-        RecyclerView.ItemAnimator animator = recyclerView.getItemAnimator();
-        if (animator instanceof SimpleItemAnimator) {
-            ((SimpleItemAnimator) animator).setSupportsChangeAnimations(false);
-        }
+        TypedValue tv = new TypedValue();
+        getTheme().resolveAttribute(android.R.attr.disabledAlpha, tv, true);
+        mAlphaDisabledValue = tv.getFloat();
 
         mBroadcastReceiver = new BroadcastReceiver() {
             @Override
@@ -108,18 +161,29 @@ public class UpdatesActivity extends UpdatesListActivity {
                 if (UpdaterController.ACTION_UPDATE_STATUS.equals(intent.getAction())) {
                     String downloadId = intent.getStringExtra(UpdaterController.EXTRA_DOWNLOAD_ID);
                     handleDownloadStatusChange(downloadId);
-                    mAdapter.notifyItemChanged(downloadId);
+                    updateUI(downloadId);
                 } else if (UpdaterController.ACTION_DOWNLOAD_PROGRESS.equals(intent.getAction()) ||
                         UpdaterController.ACTION_INSTALL_PROGRESS.equals(intent.getAction())) {
                     String downloadId = intent.getStringExtra(UpdaterController.EXTRA_DOWNLOAD_ID);
-                    mAdapter.notifyItemChanged(downloadId);
+                    updateUI(downloadId);
                 } else if (UpdaterController.ACTION_UPDATE_REMOVED.equals(intent.getAction())) {
                     String downloadId = intent.getStringExtra(UpdaterController.EXTRA_DOWNLOAD_ID);
-                    mAdapter.removeItem(downloadId);
+                    removeUpdate(downloadId);
                     downloadUpdatesList(false);
                 }
             }
         };
+
+        // Initialize UI elements
+        mAction = findViewById(R.id.update_action);
+        mMenu = findViewById(R.id.update_menu);
+        mBuildDate = findViewById(R.id.build_date);
+        mBuildVersion = findViewById(R.id.build_version);
+        mBuildSize = findViewById(R.id.build_size);
+        mProgress = findViewById(R.id.progress);
+        mProgressBar = findViewById(R.id.progress_bar);
+        mProgressText = findViewById(R.id.progress_text);
+        mPercentage = findViewById(R.id.progress_percent);
 
         Toolbar toolbar = findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
@@ -127,24 +191,6 @@ public class UpdatesActivity extends UpdatesListActivity {
         if (actionBar != null) {
             actionBar.setDisplayShowTitleEnabled(false);
             actionBar.setDisplayHomeAsUpEnabled(true);
-            final int statusBarHeight;
-            TypedValue tv = new TypedValue();
-            if (getTheme().resolveAttribute(android.R.attr.actionBarSize, tv, true)) {
-                statusBarHeight = TypedValue.complexToDimensionPixelSize(
-                        tv.data, getResources().getDisplayMetrics());
-            } else {
-                statusBarHeight = 0;
-            }
-            RelativeLayout headerContainer = findViewById(R.id.header_container);
-            recyclerView.setOnApplyWindowInsetsListener((view, insets) -> {
-                int top = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top;
-                CollapsingToolbarLayout.LayoutParams lp =
-                        (CollapsingToolbarLayout.LayoutParams)
-                                headerContainer.getLayoutParams();
-                lp.topMargin = top + statusBarHeight;
-                headerContainer.setLayoutParams(lp);
-                return insets;
-            });
         }
 
         TextView headerTitle = findViewById(R.id.header_title);
@@ -230,11 +276,6 @@ public class UpdatesActivity extends UpdatesListActivity {
         } else if (itemId == R.id.menu_preferences) {
             showPreferencesDialog();
             return true;
-        } else if (itemId == R.id.menu_show_changelog) {
-            Intent openUrl = new Intent(Intent.ACTION_VIEW,
-                    Uri.parse(Utils.getChangelogURL(this)));
-            startActivity(openUrl);
-            return true;
         }
         return super.onOptionsItemSelected(item);
     }
@@ -244,25 +285,6 @@ public class UpdatesActivity extends UpdatesListActivity {
         onBackPressed();
         return true;
     }
-
-    private final ServiceConnection mConnection = new ServiceConnection() {
-
-        @Override
-        public void onServiceConnected(ComponentName className,
-                                       IBinder service) {
-            UpdaterService.LocalBinder binder = (UpdaterService.LocalBinder) service;
-            mUpdaterService = binder.getService();
-            mAdapter.setUpdaterController(mUpdaterService.getUpdaterController());
-            getUpdatesList();
-        }
-
-        @Override
-        public void onServiceDisconnected(ComponentName componentName) {
-            mAdapter.setUpdaterController(null);
-            mUpdaterService = null;
-            mAdapter.notifyDataSetChanged();
-        }
-    };
 
     private void loadUpdatesList(File jsonFile, boolean manualRefresh)
             throws IOException, JSONException {
@@ -288,16 +310,16 @@ public class UpdatesActivity extends UpdatesListActivity {
         List<UpdateInfo> sortedUpdates = controller.getUpdates();
         if (sortedUpdates.isEmpty()) {
             findViewById(R.id.no_new_updates_view).setVisibility(View.VISIBLE);
-            findViewById(R.id.recycler_view).setVisibility(View.GONE);
+            findViewById(R.id.updates_available_view).setVisibility(View.GONE);
         } else {
             findViewById(R.id.no_new_updates_view).setVisibility(View.GONE);
-            findViewById(R.id.recycler_view).setVisibility(View.VISIBLE);
+            findViewById(R.id.updates_available_view).setVisibility(View.VISIBLE);
             sortedUpdates.sort((u1, u2) -> Long.compare(u2.getTimestamp(), u1.getTimestamp()));
             for (UpdateInfo update : sortedUpdates) {
                 updateIds.add(update.getDownloadId());
             }
-            mAdapter.setData(updateIds);
-            mAdapter.notifyDataSetChanged();
+            mDownloadIds = updateIds;
+            updateUI(mDownloadIds.get(0)); // Update UI with the first (latest) update
         }
     }
 
@@ -397,7 +419,7 @@ public class UpdatesActivity extends UpdatesListActivity {
     }
 
     private void handleDownloadStatusChange(String downloadId) {
-        UpdateInfo update = mUpdaterService.getUpdaterController().getUpdate(downloadId);
+        UpdateInfo update = mUpdaterController.getUpdate(downloadId);
         switch (update.getStatus()) {
             case PAUSED_ERROR:
                 showSnackbar(R.string.snack_download_failed, Snackbar.LENGTH_LONG);
@@ -411,7 +433,117 @@ public class UpdatesActivity extends UpdatesListActivity {
         }
     }
 
-    @Override
+    private void updateUI(String downloadId) {
+        if (mDownloadIds == null || mDownloadIds.isEmpty()) {
+            return;
+        }
+
+        UpdateInfo update = mUpdaterController.getUpdate(downloadId);
+        if (update == null) {
+            return;
+        }
+
+        mBuildDate.setText(StringGenerator.getDateLocalizedUTC(this,
+                DateFormat.LONG, update.getTimestamp()));
+        mBuildVersion.setText(getString(R.string.list_build_version,
+                Utils.getDisplayVersion(update.getVersion())));
+
+        boolean activeLayout = update.getPersistentStatus() == UpdateStatus.Persistent.INCOMPLETE ||
+                update.getStatus() == UpdateStatus.STARTING ||
+                update.getStatus() == UpdateStatus.INSTALLING ||
+                mUpdaterController.isVerifyingUpdate();
+
+        if (activeLayout) {
+            handleActiveStatus(update);
+        } else {
+            handleNotActiveStatus(update);
+        }
+    }
+
+    private void handleActiveStatus(UpdateInfo update) {
+        boolean canDelete = false;
+
+        final String downloadId = update.getDownloadId();
+        if (mUpdaterController.isDownloading(downloadId)) {
+            canDelete = true;
+            String downloaded = Formatter.formatShortFileSize(this, update.getFile().length());
+            String total = Formatter.formatShortFileSize(this, update.getFileSize());
+            String percentage = NumberFormat.getPercentInstance().format(update.getProgress() / 100.f);
+            mPercentage.setText(percentage);
+            mProgressText.setText(getString(R.string.list_download_progress_newer, downloaded, total));
+            setButtonAction(Action.PAUSE, downloadId, true);
+            mProgressBar.setIndeterminate(update.getStatus() == UpdateStatus.STARTING);
+            mProgressBar.setProgress(update.getProgress());
+        } else if (mUpdaterController.isInstallingUpdate(downloadId)) {
+            setButtonAction(Action.CANCEL_INSTALLATION, downloadId, true);
+            boolean notAB = !mUpdaterController.isInstallingABUpdate();
+            mProgressText.setText(notAB ? R.string.dialog_prepare_zip_message :
+                    update.getFinalizing() ?
+                            R.string.finalizing_package :
+                            R.string.preparing_ota_first_boot);
+            mPercentage.setText(NumberFormat.getPercentInstance().format(update.getInstallProgress() / 100.f));
+            mProgressBar.setIndeterminate(false);
+            mProgressBar.setProgress(update.getInstallProgress());
+        } else if (mUpdaterController.isVerifyingUpdate(downloadId)) {
+            setButtonAction(Action.INSTALL, downloadId, false);
+            mProgressText.setText(R.string.list_verifying_update);
+            mProgressBar.setIndeterminate(true);
+        } else {
+            canDelete = true;
+            setButtonAction(Action.RESUME, downloadId, !isBusy());
+            String downloaded = Formatter.formatShortFileSize(this, update.getFile().length());
+            String total = Formatter.formatShortFileSize(this, update.getFileSize());
+            String percentage = NumberFormat.getPercentInstance().format(update.getProgress() / 100.f);
+            mPercentage.setText(percentage);
+            mProgressText.setText(getString(R.string.list_download_progress_newer, downloaded, total));
+            mProgressBar.setIndeterminate(false);
+            mProgressBar.setProgress(update.getProgress());
+        }
+
+        mMenu.setOnClickListener(getClickListener(update, canDelete, mMenu));
+        mProgress.setVisibility(View.VISIBLE);
+        mProgressText.setVisibility(View.VISIBLE);
+        mBuildSize.setVisibility(View.INVISIBLE);
+    }
+
+    private void handleNotActiveStatus(UpdateInfo update) {
+        final String downloadId = update.getDownloadId();
+        if (mUpdaterController.isWaitingForReboot(downloadId)) {
+            setButtonAction(Action.REBOOT, downloadId, true);
+        } else if (update.getPersistentStatus() == UpdateStatus.Persistent.VERIFIED) {
+            setButtonAction(Utils.canInstall(update) ? Action.INSTALL : Action.DELETE, downloadId, !isBusy());
+        } else if (!Utils.canInstall(update)) {
+            setButtonAction(Action.INFO, downloadId, !isBusy());
+        } else {
+            setButtonAction(Action.DOWNLOAD, downloadId, !isBusy());
+        }
+        String fileSize = Formatter.formatShortFileSize(this, update.getFileSize());
+        mBuildSize.setText(fileSize);
+
+        mMenu.setOnClickListener(getClickListener(update, true, mMenu));
+        mProgress.setVisibility(View.INVISIBLE);
+        mProgressText.setVisibility(View.INVISIBLE);
+        mBuildSize.setVisibility(View.VISIBLE);
+    }
+
+    private void removeUpdate(String downloadId) {
+        if (mDownloadIds != null) {
+            mDownloadIds.remove(downloadId);
+            if (mDownloadIds.isEmpty()) {
+                findViewById(R.id.no_new_updates_view).setVisibility(View.VISIBLE);
+                findViewById(R.id.updates_available_view).setVisibility(View.GONE);
+            } else {
+                updateUI(mDownloadIds.get(0));
+            }
+        }
+    }
+
+    private boolean isBusy() {
+        return mUpdaterController.hasActiveDownloads()
+                || mUpdaterController.isVerifyingUpdate()
+                || mUpdaterController.isInstallingUpdate();
+    }
+
     public void showSnackbar(int stringId, int duration) {
         Snackbar.make(findViewById(R.id.main_container), stringId, duration).show();
     }
@@ -432,6 +564,229 @@ public class UpdatesActivity extends UpdatesListActivity {
             mRefreshAnimation.setRepeatCount(0);
             mRefreshIconView.setEnabled(true);
         }
+    }
+
+    private void setButtonAction(Action action, final String downloadId, boolean enabled) {
+        final View.OnClickListener clickListener;
+        switch (action) {
+            case DOWNLOAD:
+                mAction.setText(R.string.action_download);
+                clickListener = enabled ? view -> startDownloadWithWarning(downloadId) : null;
+                break;
+            case PAUSE:
+                mAction.setText(R.string.action_pause);
+                clickListener = enabled ? view -> mUpdaterController.pauseDownload(downloadId) : null;
+                break;
+            case RESUME:
+                mAction.setText(R.string.action_resume);
+                UpdateInfo update = mUpdaterController.getUpdate(downloadId);
+                final boolean canInstall = Utils.canInstall(update) ||
+                        update.getFile().length() == update.getFileSize();
+                clickListener = enabled ? view -> {
+                    if (canInstall) {
+                        mUpdaterController.resumeDownload(downloadId);
+                    } else {
+                        showSnackbar(R.string.snack_update_not_installable, Snackbar.LENGTH_LONG);
+                    }
+                } : null;
+                break;
+            case INSTALL:
+                mAction.setText(R.string.action_install);
+                clickListener = enabled ? view -> {
+                    if (Utils.canInstall(mUpdaterController.getUpdate(downloadId))) {
+                        AlertDialog.Builder installDialog = getInstallDialog(downloadId);
+                        if (installDialog != null) {
+                            installDialog.show();
+                        }
+                    } else {
+                        showSnackbar(R.string.snack_update_not_installable, Snackbar.LENGTH_LONG);
+                    }
+                } : null;
+                break;
+            case INFO:
+                mAction.setText(R.string.action_info);
+                clickListener = enabled ? view -> showInfoDialog() : null;
+                break;
+            case DELETE:
+                mAction.setText(R.string.action_delete);
+                clickListener = enabled ? view -> getDeleteDialog(downloadId).show() : null;
+                break;
+            case CANCEL_INSTALLATION:
+                mAction.setText(R.string.action_cancel);
+                clickListener = enabled ? view -> getCancelInstallationDialog().show() : null;
+                break;
+            case REBOOT:
+                mAction.setText(R.string.reboot);
+                clickListener = enabled ? view -> {
+                    PowerManager pm = getSystemService(PowerManager.class);
+                    pm.reboot(null);
+                } : null;
+                break;
+            default:
+                clickListener = null;
+        }
+        mAction.setEnabled(enabled);
+        mAction.setOnClickListener(clickListener);
+        mAction.setAlpha(enabled ? 1.f : mAlphaDisabledValue);
+    }
+
+    private void startDownloadWithWarning(final String downloadId) {
+        if (!Utils.isNetworkMetered(this)) {
+            mUpdaterController.startDownload(downloadId);
+            return;
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.update_over_metered_network_title)
+                .setMessage(R.string.update_over_metered_network_message)
+                .setPositiveButton(R.string.action_download,
+                        (dialog, which) -> mUpdaterController.startDownload(downloadId))
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    private View.OnClickListener getClickListener(final UpdateInfo update,
+                                                  final boolean canDelete, View anchor) {
+        return view -> startActionMode(update, canDelete, anchor);
+    }
+
+    private void startActionMode(final UpdateInfo update, final boolean canDelete, View anchor) {
+        mSelectedDownload = update.getDownloadId();
+
+        ContextThemeWrapper wrapper = new ContextThemeWrapper(this,
+                R.style.AppTheme_PopupMenuOverlapAnchor);
+        PopupMenu popupMenu = new PopupMenu(wrapper, anchor, Gravity.NO_GRAVITY);
+        popupMenu.inflate(R.menu.menu_action_mode);
+
+        MenuBuilder menu = (MenuBuilder) popupMenu.getMenu();
+        menu.findItem(R.id.menu_delete_action).setVisible(canDelete);
+
+        popupMenu.setOnMenuItemClickListener(item -> {
+            int itemId = item.getItemId();
+            if (itemId == R.id.menu_delete_action) {
+                getDeleteDialog(update.getDownloadId()).show();
+                return true;
+            }
+            return false;
+        });
+
+        MenuPopupHelper helper = new MenuPopupHelper(wrapper, menu, anchor);
+        helper.show();
+    }
+
+    private void showInfoDialog() {
+        if (infoDialog != null) {
+            infoDialog.dismiss();
+        }
+        infoDialog = new AlertDialog.Builder(this)
+                .setTitle(R.string.blocked_update_dialog_title)
+                .setPositiveButton(android.R.string.ok, null)
+                .setMessage(R.string.blocked_update_dialog_message)
+                .show();
+        TextView textView = infoDialog.findViewById(android.R.id.message);
+        if (textView != null) {
+            textView.setMovementMethod(LinkMovementMethod.getInstance());
+        }
+    }
+
+    private AlertDialog.Builder getDeleteDialog(final String downloadId) {
+        return new AlertDialog.Builder(this)
+                .setTitle(R.string.confirm_delete_dialog_title)
+                .setMessage(R.string.confirm_delete_dialog_message)
+                .setPositiveButton(android.R.string.ok,
+                        (dialog, which) -> {
+                            mUpdaterController.pauseDownload(downloadId);
+                            mUpdaterController.deleteUpdate(downloadId);
+                        })
+                .setNegativeButton(android.R.string.cancel, null);
+    }
+
+    private AlertDialog.Builder getInstallDialog(final String downloadId) {
+        if (!isBatteryLevelOk()) {
+            Resources resources = getResources();
+            String message = resources.getString(R.string.dialog_battery_low_message_pct,
+                    resources.getInteger(R.integer.battery_ok_percentage_discharging),
+                    resources.getInteger(R.integer.battery_ok_percentage_charging));
+            return new AlertDialog.Builder(this)
+                    .setTitle(R.string.dialog_battery_low_title)
+                    .setMessage(message)
+                    .setPositiveButton(android.R.string.ok, null);
+        }
+        if (isScratchMounted()) {
+            return new AlertDialog.Builder(this)
+                    .setTitle(R.string.dialog_scratch_mounted_title)
+                    .setMessage(R.string.dialog_scratch_mounted_message)
+                    .setPositiveButton(android.R.string.ok, null);
+        }
+        UpdateInfo update = mUpdaterController.getUpdate(downloadId);
+        int resId;
+        try {
+            if (Utils.isABUpdate(update.getFile())) {
+                resId = R.string.apply_update_dialog_message_ab;
+            } else {
+                resId = R.string.apply_update_dialog_message;
+            }
+        } catch (IOException e) {
+            Log.e(TAG, "Could not determine the type of the update");
+            return null;
+        }
+
+        String buildDate = StringGenerator.getDateLocalizedUTC(this,
+                DateFormat.MEDIUM, update.getTimestamp());
+        String buildInfoText = getString(R.string.list_build_version_date,
+                update.getVersion(), buildDate);
+        return new AlertDialog.Builder(this)
+                .setTitle(R.string.apply_update_dialog_title)
+                .setMessage(getString(resId, buildInfoText,
+                        getString(android.R.string.ok)))
+                .setPositiveButton(android.R.string.ok,
+                        (dialog, which) -> {
+                            Utils.triggerUpdate(this, downloadId);
+                            maybeShowInfoDialog();
+                        })
+                .setNegativeButton(android.R.string.cancel, null);
+    }
+
+    private AlertDialog.Builder getCancelInstallationDialog() {
+        return new AlertDialog.Builder(this)
+                .setMessage(R.string.cancel_installation_dialog_message)
+                .setPositiveButton(android.R.string.ok,
+                        (dialog, which) -> {
+                            Intent intent = new Intent(this, UpdaterService.class);
+                            intent.setAction(UpdaterService.ACTION_INSTALL_STOP);
+                            startService(intent);
+                        })
+                .setNegativeButton(android.R.string.cancel, null);
+    }
+
+    private void maybeShowInfoDialog() {
+        SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(this);
+        boolean alreadySeen = preferences.getBoolean(Constants.HAS_SEEN_INFO_DIALOG, false);
+        if (alreadySeen) {
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.info_dialog_title)
+                .setMessage(R.string.info_dialog_message)
+                .setPositiveButton(R.string.info_dialog_ok, (dialog, which) -> preferences.edit()
+                        .putBoolean(Constants.HAS_SEEN_INFO_DIALOG, true)
+                        .apply())
+                .show();
+    }
+
+    private boolean isBatteryLevelOk() {
+        Intent intent = registerReceiver(null,
+                new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+        if (!intent.getBooleanExtra(BatteryManager.EXTRA_PRESENT, false)) {
+            return true;
+        }
+        int percent = Math.round(100.f * intent.getIntExtra(BatteryManager.EXTRA_LEVEL, 100) /
+                intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100));
+        int plugged = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0);
+        int required = (plugged & BATTERY_PLUGGED_ANY) != 0 ?
+                getResources().getInteger(R.integer.battery_ok_percentage_charging) :
+                getResources().getInteger(R.integer.battery_ok_percentage_discharging);
+        return percent >= required;
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -496,7 +851,7 @@ public class UpdatesActivity extends UpdatesListActivity {
 
                     if (Utils.isABDevice()) {
                         boolean enableABPerfMode = abPerfMode.isChecked();
-                        mUpdaterService.getUpdaterController().setPerformanceMode(enableABPerfMode);
+                        mUpdaterController.setPerformanceMode(enableABPerfMode);
                     }
                     if (Utils.isRecoveryUpdateExecPresent()) {
                         boolean enableRecoveryUpdate = updateRecovery.isChecked();
@@ -505,5 +860,16 @@ public class UpdatesActivity extends UpdatesListActivity {
                     }
                 })
                 .show();
+    }
+
+    private enum Action {
+        DOWNLOAD,
+        PAUSE,
+        RESUME,
+        INSTALL,
+        INFO,
+        DELETE,
+        CANCEL_INSTALLATION,
+        REBOOT,
     }
 }
