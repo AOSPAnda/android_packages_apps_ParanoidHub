@@ -51,12 +51,6 @@
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="updater"/>
         </service>
-        <service
-            android:name=".ExportUpdateService"
-            android:foregroundServiceType="specialUse">
-            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="updater"/>
-        </service>
 
         <receiver android:name=".UpdaterReceiver" android:exported="false">
             <intent-filter>

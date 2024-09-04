@@ -67,7 +67,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.text.DateFormat;
 import java.text.NumberFormat;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
 
@@ -299,14 +298,6 @@ public class UpdatesListAdapter extends RecyclerView.Adapter<UpdatesListAdapter.
 
     public void setData(List<String> downloadIds) {
         mDownloadIds = downloadIds;
-    }
-
-    public void addItem(String downloadId) {
-        if (mDownloadIds == null) {
-            mDownloadIds = new ArrayList<>();
-        }
-        mDownloadIds.add(0, downloadId);
-        notifyItemInserted(0);
     }
 
     public void notifyItemChanged(String downloadId) {
@@ -557,7 +548,6 @@ public class UpdatesListAdapter extends RecyclerView.Adapter<UpdatesListAdapter.
         MenuBuilder menu = (MenuBuilder) popupMenu.getMenu();
         menu.findItem(R.id.menu_delete_action).setVisible(shouldShowDelete);
         menu.findItem(R.id.menu_copy_url).setVisible(update.getAvailableOnline());
-        menu.findItem(R.id.menu_export_update).setVisible(isVerified);
 
         popupMenu.setOnMenuItemClickListener(item -> {
             int itemId = item.getItemId();
@@ -569,11 +559,6 @@ public class UpdatesListAdapter extends RecyclerView.Adapter<UpdatesListAdapter.
                         mActivity.getString(R.string.label_download_url),
                         update.getDownloadUrl(),
                         mActivity.getString(R.string.toast_download_url_copied));
-                return true;
-            } else if (itemId == R.id.menu_export_update) {
-                if (mActivity != null) {
-                    mActivity.exportUpdate(update);
-                }
                 return true;
             }
             return false;

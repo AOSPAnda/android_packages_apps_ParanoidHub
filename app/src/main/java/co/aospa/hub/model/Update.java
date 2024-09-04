@@ -18,7 +18,6 @@ package co.aospa.hub.model;
 import java.io.File;
 
 public class Update extends UpdateBase implements UpdateInfo {
-    public static final String LOCAL_ID = "local";
 
     private UpdateStatus mStatus = UpdateStatus.UNKNOWN;
     private int mPersistentStatus = UpdateStatus.Persistent.UNKNOWN;

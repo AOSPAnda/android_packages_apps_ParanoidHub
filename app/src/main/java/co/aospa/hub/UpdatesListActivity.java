@@ -17,9 +17,6 @@ package co.aospa.hub;
 
 import androidx.appcompat.app.AppCompatActivity;
 
-import co.aospa.hub.model.UpdateInfo;
-
 public abstract class UpdatesListActivity extends AppCompatActivity {
-    public abstract void exportUpdate(UpdateInfo update);
     public abstract void showSnackbar(int stringId, int duration);
 }
