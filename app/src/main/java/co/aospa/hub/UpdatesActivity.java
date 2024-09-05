@@ -47,8 +47,8 @@ import androidx.appcompat.widget.SwitchCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import androidx.preference.PreferenceManager;
 
+import com.google.android.material.button.MaterialButton;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
-import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
 import com.google.android.material.snackbar.Snackbar;
 
@@ -67,7 +67,6 @@ import java.util.stream.Stream;
 import co.aospa.hub.controller.UpdaterController;
 import co.aospa.hub.controller.UpdaterService;
 import co.aospa.hub.download.DownloadClient;
-import co.aospa.hub.misc.BuildInfoUtils;
 import co.aospa.hub.misc.Constants;
 import co.aospa.hub.misc.StringGenerator;
 import co.aospa.hub.misc.Utils;
@@ -84,17 +83,15 @@ public class UpdatesActivity extends AppCompatActivity {
     private UpdaterService mUpdaterService;
     private BroadcastReceiver mBroadcastReceiver;
 
-    private ExtendedFloatingActionButton mUpdateAction;
-    private ExtendedFloatingActionButton mDeleteAction;
+    private MaterialButton mUpdateAction;
     private TextView mUpdateStatus;
-    private TextView mHeaderSecurityPatch;
+    private LinearLayout mSystemInfoLayout;
     private LinearLayout mProgress;
     private LinearProgressIndicator mProgressBar;
     private TextView mProgressText;
     private TextView mProgressPercent;
 
-    private String mSelectedDownload;
-    private List<String> mDownloadIds;
+    private String mLatestDownloadId;
     private UpdaterController mUpdaterController;
     private final ServiceConnection mConnection = new ServiceConnection() {
 
@@ -146,12 +143,12 @@ public class UpdatesActivity extends AppCompatActivity {
         };
 
         mUpdateAction = findViewById(R.id.update_action);
-        mDeleteAction = findViewById(R.id.delete_action);
         mUpdateStatus = findViewById(R.id.update_status);
-        mProgress = findViewById(R.id.progress);
+        mProgress = findViewById(R.id.progress_detail);
         mProgressBar = findViewById(R.id.progress_bar);
         mProgressText = findViewById(R.id.progress_text);
         mProgressPercent = findViewById(R.id.progress_percent);
+        mSystemInfoLayout = findViewById(R.id.system_info_layout);
 
         TextView headerBuildVersion = findViewById(R.id.header_build_version);
         headerBuildVersion.setText(
@@ -163,7 +160,6 @@ public class UpdatesActivity extends AppCompatActivity {
         updateLastCheckedString();
 
         mUpdateAction.setOnClickListener(v -> handleUpdateAction());
-        mDeleteAction.setOnClickListener(v -> getDeleteDialog(mSelectedDownload).show());
     }
 
     @Override
@@ -218,22 +214,22 @@ public class UpdatesActivity extends AppCompatActivity {
                 downloadUpdatesList(true);
                 break;
             case "Download":
-                startDownloadWithWarning(mSelectedDownload);
+                startDownloadWithWarning(mLatestDownloadId);
                 break;
             case "Pause":
-                mUpdaterController.pauseDownload(mSelectedDownload);
+                mUpdaterController.pauseDownload(mLatestDownloadId);
                 break;
             case "Resume":
-                UpdateInfo update = mUpdaterController.getUpdate(mSelectedDownload);
+                UpdateInfo update = mUpdaterController.getUpdate(mLatestDownloadId);
                 if (Utils.canInstall(update) || update.getFile().length() == update.getFileSize()) {
-                    mUpdaterController.resumeDownload(mSelectedDownload);
+                    mUpdaterController.resumeDownload(mLatestDownloadId);
                 } else {
                     showSnackbar(R.string.snack_update_not_installable, Snackbar.LENGTH_LONG);
                 }
                 break;
             case "Install":
-                if (Utils.canInstall(mUpdaterController.getUpdate(mSelectedDownload))) {
-                    getInstallDialog(mSelectedDownload).show();
+                if (Utils.canInstall(mUpdaterController.getUpdate(mLatestDownloadId))) {
+                    getInstallDialog(mLatestDownloadId).show();
                 } else {
                     showSnackbar(R.string.snack_update_not_installable, Snackbar.LENGTH_LONG);
                 }
@@ -265,20 +261,13 @@ public class UpdatesActivity extends AppCompatActivity {
                     Snackbar.LENGTH_SHORT);
         }
 
-        List<String> updateIds = new ArrayList<>();
         List<UpdateInfo> sortedUpdates = controller.getUpdates();
         if (sortedUpdates.isEmpty()) {
-            findViewById(R.id.no_new_updates_view).setVisibility(View.VISIBLE);
-            findViewById(R.id.updates_available_view).setVisibility(View.GONE);
+            updateUI(null);
         } else {
-            findViewById(R.id.no_new_updates_view).setVisibility(View.GONE);
-            findViewById(R.id.updates_available_view).setVisibility(View.VISIBLE);
             sortedUpdates.sort((u1, u2) -> Long.compare(u2.getTimestamp(), u1.getTimestamp()));
-            for (UpdateInfo update : sortedUpdates) {
-                updateIds.add(update.getDownloadId());
-            }
-            mDownloadIds = updateIds;
-            updateUI(mDownloadIds.get(0)); // Update UI with the first (latest) update
+            mLatestDownloadId = sortedUpdates.get(0).getDownloadId();
+            updateUI(mLatestDownloadId);
         }
     }
 
@@ -390,9 +379,10 @@ public class UpdatesActivity extends AppCompatActivity {
     }
 
     private void updateUI(String downloadId) {
-        if (mDownloadIds == null || mDownloadIds.isEmpty()) {
+        if (mLatestDownloadId == null) {
             setUpdateActionButton(Action.CHECK_UPDATES, null, true);
             mUpdateStatus.setText(R.string.list_no_updates);
+            mSystemInfoLayout.setVisibility(View.VISIBLE);
             return;
         }
 
@@ -402,6 +392,7 @@ public class UpdatesActivity extends AppCompatActivity {
         }
 
         mUpdateStatus.setText(R.string.system_update_available);
+        mSystemInfoLayout.setVisibility(View.GONE);
 
         boolean activeLayout = update.getPersistentStatus() == UpdateStatus.Persistent.INCOMPLETE ||
                 update.getStatus() == UpdateStatus.STARTING ||
@@ -414,8 +405,7 @@ public class UpdatesActivity extends AppCompatActivity {
             handleNotActiveStatus(update);
         }
 
-        mSelectedDownload = downloadId;
-        mDeleteAction.setVisibility(activeLayout ? View.GONE : View.VISIBLE);
+        mLatestDownloadId = downloadId;
     }
 
     private void handleActiveStatus(UpdateInfo update) {
@@ -472,14 +462,9 @@ public class UpdatesActivity extends AppCompatActivity {
     }
 
     private void removeUpdate(String downloadId) {
-        if (mDownloadIds != null) {
-            mDownloadIds.remove(downloadId);
-            if (mDownloadIds.isEmpty()) {
-                findViewById(R.id.no_new_updates_view).setVisibility(View.VISIBLE);
-                findViewById(R.id.updates_available_view).setVisibility(View.GONE);
-            } else {
-                updateUI(mDownloadIds.get(0));
-            }
+        if (mLatestDownloadId != null && mLatestDownloadId.equals(downloadId)) {
+            mLatestDownloadId = null;
+            updateUI(mLatestDownloadId);
         }
     }
 
@@ -497,39 +482,30 @@ public class UpdatesActivity extends AppCompatActivity {
         switch (action) {
             case CHECK_UPDATES:
                 mUpdateAction.setText(R.string.check_for_update);
-                mUpdateAction.setIcon(getDrawable(R.drawable.ic_refresh));
                 break;
             case DOWNLOAD:
                 mUpdateAction.setText(R.string.action_download);
-                mUpdateAction.setIcon(getDrawable(R.drawable.ic_download));
                 break;
             case PAUSE:
                 mUpdateAction.setText(R.string.action_pause);
-                mUpdateAction.setIcon(getDrawable(R.drawable.ic_pause));
                 break;
             case RESUME:
                 mUpdateAction.setText(R.string.action_resume);
-                mUpdateAction.setIcon(getDrawable(R.drawable.ic_resume));
                 break;
             case INSTALL:
                 mUpdateAction.setText(R.string.action_install);
-                mUpdateAction.setIcon(getDrawable(R.drawable.ic_system_update));
                 break;
             case INFO:
                 mUpdateAction.setText(R.string.action_info);
-                mUpdateAction.setIcon(getDrawable(R.drawable.ic_info));
                 break;
             case DELETE:
                 mUpdateAction.setText(R.string.action_delete);
-                mUpdateAction.setIcon(getDrawable(R.drawable.ic_delete));
                 break;
             case CANCEL_INSTALLATION:
                 mUpdateAction.setText(R.string.action_cancel);
-                mUpdateAction.setIcon(getDrawable(R.drawable.ic_cancel));
                 break;
             case REBOOT:
                 mUpdateAction.setText(R.string.reboot);
-                mUpdateAction.setIcon(getDrawable(R.drawable.ic_refresh));
                 break;
         }
         mUpdateAction.setEnabled(enabled);
